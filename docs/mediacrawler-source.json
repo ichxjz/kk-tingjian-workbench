@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/NanmiCoder/MediaCrawler",
+  "retrievedAt": "2026-10-04T03:25:59.683Z",
+  "archiveSha256": "a451d9ff176f393830bb44a1f000606956a9fc7d5edd7a56642dffb0521dc8df",
+  "python": "3.11",
+  "check": "all seven upstream factories imported successfully",
+  "license": "NON-COMMERCIAL LEARNING LICENSE 1.1",
+  "commit": "bf28178082bc69989954f65a13a17bc129b9aa6e"
+}

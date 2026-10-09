@@ -1,0 +1,31 @@
+import { DatabaseSync } from 'node:sqlite';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+export class Store {
+ constructor(file){if(file!==':memory:')mkdirSync(path.dirname(file),{recursive:true});this.db=new DatabaseSync(file);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+ CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS tasks(id TEXT PRIMARY KEY,name TEXT NOT NULL,mode TEXT NOT NULL,status TEXT NOT NULL,options TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,message TEXT NOT NULL DEFAULT '',processed INTEGER NOT NULL DEFAULT 0,duplicates INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS comments(key TEXT PRIMARY KEY,payload TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS task_comments(task_id TEXT NOT NULL REFERENCES tasks(id),comment_key TEXT NOT NULL REFERENCES comments(key),payload TEXT,PRIMARY KEY(task_id,comment_key));
+ CREATE TABLE IF NOT EXISTS sources(task_id TEXT NOT NULL REFERENCES tasks(id),id TEXT NOT NULL,url TEXT NOT NULL,platform TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL DEFAULT '',count INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(task_id,id));
+ CREATE TABLE IF NOT EXISTS favorites(task_id TEXT NOT NULL,comment_key TEXT NOT NULL,PRIMARY KEY(task_id,comment_key));`);
+ if(!this.db.prepare('PRAGMA table_info(tasks)').all().some(c=>c.name==='received'))this.db.exec('ALTER TABLE tasks ADD COLUMN received INTEGER NOT NULL DEFAULT 0; ALTER TABLE tasks ADD COLUMN received_legacy INTEGER NOT NULL DEFAULT 0; UPDATE tasks SET received=processed,received_legacy=1');
+ if(!this.db.prepare('PRAGMA table_info(task_comments)').all().some(c=>c.name==='payload'))this.db.exec('ALTER TABLE task_comments ADD COLUMN payload TEXT');
+ this.db.prepare("UPDATE tasks SET status='paused',message='服务重启，已保存数据。点击继续采集。' WHERE status IN ('running','queued','stopping')").run(); }
+ create({name,mode,options={}}){const id=randomUUID(),now=new Date().toISOString();this.db.prepare('INSERT INTO tasks(id,name,mode,status,options,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id,name,mode,'queued',JSON.stringify(options),now,now);return this.get(id);}
+ unpack(t){return t?{...t,options:JSON.parse(t.options),count:this.db.prepare('SELECT COUNT(*) n FROM task_comments WHERE task_id=?').get(t.id).n}:null;}
+ get(id){return this.unpack(this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id));}
+ list(){return this.db.prepare('SELECT * FROM tasks ORDER BY created_at DESC').all().map(t=>this.unpack(t));}
+ update(id,fields){const allowed=['status','message','processed','duplicates','name'];const keys=Object.keys(fields).filter(k=>allowed.includes(k));if(!keys.length)return;this.db.prepare(`UPDATE tasks SET ${keys.map(k=>k+'=?').join(',')},updated_at=? WHERE id=?`).run(...keys.map(k=>fields[k]),new Date().toISOString(),id);}
+ insert(id,rows){let added=0,duplicates=0;this.db.exec('BEGIN');try { const up=this.db.prepare('INSERT INTO comments(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload');const link=this.db.prepare('INSERT OR IGNORE INTO task_comments(task_id,comment_key) VALUES(?,?)');for(const c of rows){up.run(c.key,JSON.stringify(c));const r=link.run(id,c.key);added+=r.changes;duplicates+=1-r.changes;this.db.prepare('UPDATE task_comments SET payload=? WHERE task_id=? AND comment_key=?').run(JSON.stringify(c),id,c.key);}this.db.prepare('UPDATE tasks SET received=received+?,processed=processed+?,duplicates=duplicates+?,updated_at=? WHERE id=?').run(rows.length,rows.length,duplicates,new Date().toISOString(),id);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}return {added,duplicates};}
+ recordReads(id,count){if(count>0)this.db.prepare('UPDATE tasks SET received=received+?,updated_at=? WHERE id=?').run(count,new Date().toISOString(),id);}
+ comments(id){return this.db.prepare('SELECT COALESCE(t.payload,c.payload) payload, f.comment_key AS favorite FROM task_comments t JOIN comments c ON c.key=t.comment_key LEFT JOIN favorites f ON f.task_id=t.task_id AND f.comment_key=t.comment_key WHERE t.task_id=? ORDER BY t.rowid').all(id).map(r=>({...JSON.parse(r.payload),favorite:!!r.favorite}));}
+ source(task,id,url,platform,status='pending',message='',count=0){this.db.prepare('INSERT INTO sources(task_id,id,url,platform,status,message,count) VALUES(?,?,?,?,?,?,?) ON CONFLICT(task_id,id) DO UPDATE SET status=excluded.status,message=excluded.message,count=excluded.count,url=excluded.url').run(task,id,url,platform,status,message,count);}
+ sources(id){return this.db.prepare('SELECT * FROM sources WHERE task_id=?').all(id);}
+ favorite(id,key,on){if(!this.db.prepare('SELECT 1 FROM task_comments WHERE task_id=? AND comment_key=?').get(id,key))throw new Error('评论不存在');if(on)this.db.prepare('INSERT OR IGNORE INTO favorites VALUES(?,?)').run(id,key);else this.db.prepare('DELETE FROM favorites WHERE task_id=? AND comment_key=?').run(id,key);}
+ prepareContinuation(id){const task=this.get(id);if(!task||!['links','search','creator'].includes(task.mode))throw Error('该任务没有平台采集来源，无法继续采集');const sources=this.sources(id);const counts=new Map();for(const c of this.comments(id)){const key=c.platform+':'+c.post_id;counts.set(key,(counts.get(key)||0)+1);}const batch=Math.max(10,Math.min(1000,Number(task.options.continueBatch||task.options.maxComments)||100));const maxComments=task.options.maxComments===null?null:Math.max(Number(task.options.maxComments)||100,...[...counts.values()].map(n=>n+batch));
+ this.db.exec('BEGIN');try{this.db.prepare('UPDATE tasks SET options=? WHERE id=?').run(JSON.stringify({...task.options,continueBatch:batch,maxComments}),id);this.db.prepare("UPDATE sources SET status='pending',message='等待补采，已保存评论保留' WHERE task_id=?").run(id);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}return {task,sources};}
+ restoreContinuation({task,sources}){this.db.exec('BEGIN');try{this.db.prepare('UPDATE tasks SET options=?,status=?,message=?,updated_at=? WHERE id=?').run(JSON.stringify(task.options),task.status,task.message,task.updated_at,task.id);for(const s of sources)this.source(task.id,s.id,s.url,s.platform,s.status,s.message,s.count);this.db.exec('COMMIT');}catch(e){this.db.exec('ROLLBACK');throw e;}}
+ close(){this.db.close();}
+}

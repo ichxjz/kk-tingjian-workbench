@@ -1,0 +1,2 @@
+import {spawnSync} from 'node:child_process';import {existsSync} from 'node:fs';
+const python='.runtime/vendor/MediaCrawler/.venv/bin/python';if(existsSync(python)){for(const args of [['tests/test_bridge.py'],['tests/test_parallel_browser.py'],['src/bridge/mediacrawler.py','--check']]){const r=spawnSync(python,args,{stdio:'inherit',timeout:90000});if(r.status!==0){process.exitCode=1;break;}}}else console.log('SKIP MediaCrawler Python runtime: run npm run setup:mediacrawler first');

@@ -1,0 +1,7 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {Collector} from '../src/lib/collector.mjs';
+import {Store} from '../src/lib/store.mjs';
+import {normalize,sourceId} from '../src/lib/core.mjs';
+test('一平台搜索异常不阻断另一平台，保留成功样本和失败原因',async()=>{const s=new Store(':memory:');try{const c=new Collector(s,process.cwd());const task=s.create({name:'隔离搜索',mode:'search',options:{platforms:['douyin','xiaohongshu'],query:'test',maxPosts:2,maxComments:10}});c.discover=async p=>{if(p==='douyin')throw Error('超时');return ['https://www.xiaohongshu.com/explore/abc'];};c.collect=async(t,l,id)=>{s.insert(t.id,[normalize({text:'真实字段测试',platform:l.platform,post_id:sourceId(l.url),comment_id:'1'})]);s.source(t.id,id,l.url,l.platform,'complete','结束',1);};await c.execute(task);assert.equal(s.get(task.id).count,1);assert.equal(s.get(task.id).status,'partial');assert.match(s.get(task.id).message,/抖音搜索未完成/);}finally{s.close();}});
+test('暂停在采集真正结束前保持占用，关闭等待后台任务落盘',async()=>{const s=new Store(':memory:');try{const c=new Collector(s,process.cwd());const t=s.create({name:'停止测试',mode:'links',options:{}});let release;c.execute=async()=>{await new Promise(r=>release=r);s.update(t.id,{status:'paused'});};await c.run(t.id);c.pause(t.id);assert.equal(s.get(t.id).status,'stopping');await assert.rejects(()=>c.run(t.id),/已有/);const closing=c.close();release();await closing;assert.equal(c.active,null);assert.equal(s.get(t.id).status,'paused');assert.throws(()=>c.pause(t.id),/无需暂停/);}finally{s.close();}});

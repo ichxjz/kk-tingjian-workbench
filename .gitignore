@@ -1,0 +1,22 @@
+node_modules/
+.runtime/
+output/
+.env
+.DS_Store
+__pycache__/
+
+# Local instructions, working history and generated/private data
+/AGENTS.md
+/MEMORY.md
+/assets/
+/archive/
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+*.pem
+*.key
+.venv/
+*.pyc

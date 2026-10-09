@@ -1,0 +1,3 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {splitTranslationText,translateText} from '../src/lib/translation.mjs';
+test('Fallback translation preserves Unicode text within provider byte limit',()=>{const text='你好🌏。\n'+'多语言 test🙂'.repeat(140);const parts=splitTranslationText(text);assert.equal(parts.join(''),text);assert.ok(parts.every(p=>Buffer.byteLength(p)<=480));});
+test('Translation validates languages and preserves same-language text',async()=>{assert.deepEqual(await translateText({text:'你好',source:'zh-CN',target:'zh-CN'}),{text:'你好'});await assert.rejects(()=>translateText({text:'hello',target:'not-a-language'}),/支持的语言/);});

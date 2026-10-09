@@ -1,0 +1,6 @@
+import { chromium } from 'playwright-core';
+import { mkdir,writeFile } from 'node:fs/promises';
+const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
+await mkdir('output/verification',{recursive:true});const results=[];
+for(const [platform,url] of [['douyin','https://www.douyin.com/search/AI%E8%A7%86%E9%A2%91?type=video'],['xiaohongshu','https://www.xiaohongshu.com/search_result?keyword=AI%E8%A7%86%E9%A2%91']]){const page=await browser.newPage({locale:'zh-CN'});try{const r=await page.goto(url,{waitUntil:'domcontentloaded',timeout:25000});await page.waitForTimeout(4000);const text=(await page.locator('body').innerText()).slice(0,2000);const links=await page.locator('a[href]').evaluateAll(as=>as.map(a=>a.href).filter(x=>/\/(video|explore)\/[\w-]+/.test(x)));results.push({platform,status:r?.status(),title:await page.title(),url:page.url(),links:links.length,text});await page.screenshot({path:`output/verification/${platform}-probe.png`});}catch(e){results.push({platform,error:e.message});}await page.close();}
+await browser.close();await writeFile('output/verification/platform-probe.json',JSON.stringify(results,null,2));console.log(JSON.stringify(results,null,2));
